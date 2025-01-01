@@ -1,92 +1,75 @@
 import React, { useState, useRef } from "react";
-import Tesseract from "tesseract.js";
-// import pdfjsLib from "pdfjs-dist";
 import Webcam from "react-webcam";
 import "bootstrap/dist/css/bootstrap.min.css";
-import { getDocument } from "pdfjs-dist";
 
 const IdCardScanner = () => {
   const [uploadedImage, setUploadedImage] = useState(null);
-  const [extractedText, setExtractedText] = useState("");
+  const [extractedData, setExtractedData] = useState({});
   const [isProcessing, setIsProcessing] = useState(false);
   const [showWebcam, setShowWebcam] = useState(false);
   const webcamRef = useRef(null);
 
-  // Function to process PDF files and extract an image from the first page
-  const extractPageAsImage = async (file) => {
-    const reader = new FileReader();
-    reader.readAsArrayBuffer(file);
-  
-    return new Promise((resolve, reject) => {
-      reader.onload = async (e) => {
-        const typedArray = new Uint8Array(e.target.result);
-        const pdf = await getDocument(typedArray).promise;
-        const page = await pdf.getPage(1);
-  
-        const viewport = page.getViewport({ scale: 2 });
-        const canvas = document.createElement("canvas");
-        const context = canvas.getContext("2d");
-        canvas.width = viewport.width;
-        canvas.height = viewport.height;
-  
-        await page.render({ canvasContext: context, viewport }).promise;
-        resolve(canvas.toDataURL("image/jpeg"));
-      };
-  
-      reader.onerror = () => reject("Error reading PDF file.");
-    });
-  };
-  
+  const backendURL = "http://localhost:8000"; // Update if backend URL changes
 
-  // Function to extract text from images using Tesseract.js
-  const extractTextFromImage = (imageSrc) => {
-    setIsProcessing(true);
-
-    const img = new Image();
-    img.src = imageSrc;
-
-    img.onload = () => {
-      Tesseract.recognize(imageSrc, "eng", {
-        logger: (m) => console.log(m),
-      })
-        .then(({ data: { text } }) => {
-          setExtractedText(text.trim());
-        })
-        .catch((error) => console.error("OCR Error:", error))
-        .finally(() => setIsProcessing(false));
-    };
-
-    img.onerror = () => {
-      console.error("Error loading image.");
-      setIsProcessing(false);
-    };
-  };
-
-  // Function to handle file uploads (image or PDF)
+  // Function to handle file uploads
   const handleFileUpload = async (event) => {
     const file = event.target.files[0];
     if (!file) return;
 
-    if (file.type === "application/pdf") {
-      const imageDataUrl = await extractPageAsImage(file);
-      setUploadedImage(imageDataUrl);
-      extractTextFromImage(imageDataUrl);
-    } else {
-      const reader = new FileReader();
-      reader.onload = (e) => {
-        setUploadedImage(e.target.result);
-        extractTextFromImage(e.target.result);
-      };
-      reader.readAsDataURL(file);
+    const formData = new FormData();
+    formData.append("file", file);
+
+    setIsProcessing(true);
+
+    try {
+      const response = await fetch(`${backendURL}/upload/`, {
+        method: "POST",
+        body: formData,
+      });
+      const data = await response.json();
+      if (response.ok) {
+        setUploadedImage(data.annotated_image);
+        setExtractedData(data.data); // Assuming backend returns structured data
+      } else {
+        console.error("Error:", data.message);
+        setExtractedData({ error: `Error: ${data.message}` });
+      }
+    } catch (error) {
+      console.error("Error connecting to backend:", error);
+      setExtractedData({ error: "Error connecting to backend." });
+    } finally {
+      setIsProcessing(false);
     }
   };
 
   // Function to capture image from webcam and process it
-  const captureWithWebcam = () => {
+  const captureWithWebcam = async () => {
     const imageSrc = webcamRef.current.getScreenshot();
-    setUploadedImage(imageSrc);
-    extractTextFromImage(imageSrc);
-    setShowWebcam(false);
+    if (!imageSrc) return;
+
+    setIsProcessing(true);
+
+    try {
+      const response = await fetch(`${backendURL}/process-frame/`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ frame: imageSrc.split(",")[1] }), // Send base64 data
+      });
+      const data = await response.json();
+      if (response.ok) {
+        setUploadedImage(data.annotated_image);
+        setExtractedData(data.data); // Assuming backend returns structured data
+      } else {
+        console.error("Error:", data.message);
+        setExtractedData({ error: `Error: ${data.message}` });
+      }
+    } catch (error) {
+      console.error("Error connecting to backend:", error);
+      setExtractedData({ error: "Error connecting to backend." });
+    } finally {
+      setIsProcessing(false);
+      setShowWebcam(false);
+    }
   };
 
   return (
@@ -108,25 +91,31 @@ const IdCardScanner = () => {
       </div>
 
       {/* Display Uploaded Image */}
-      {uploadedImage && (
-        <div className="text-center mt-4">
-          <h5>Uploaded Image:</h5>
-          <img
-            src={uploadedImage}
-            alt="Uploaded ID Card"
-            style={{ maxWidth: "100%", height: "auto" }}
-          />
-        </div>
-      )}
+      {uploadedImage}
 
-      {/* Extracted Text */}
+      {/* Extracted Data */}
       {isProcessing ? (
         <div className="alert alert-info mt-4">Processing the image...</div>
       ) : (
-        extractedText && (
-          <div className="alert alert-success mt-4">
-            <h5>Extracted Text:</h5>
-            <pre>{extractedText}</pre>
+        Object.keys(extractedData).length > 0 && (
+          <div className="mt-4">
+            <h5>Extracted Data:</h5>
+            <form>
+              {Object.entries(extractedData).map(([key, value]) => (
+                <div className="mb-3" key={key}>
+                  <label htmlFor={key} className="form-label">
+                    {key.replace(/_/g, " ").toUpperCase()}
+                  </label>
+                  <input
+                    type="text"
+                    id={key}
+                    className="form-control"
+                    value={value}
+                    readOnly
+                  />
+                </div>
+              ))}
+            </form>
           </div>
         )
       )}
